@@ -625,8 +625,19 @@
   }
 
   function acceptedVotes(goalId) {
+    // `confirming_scores` rides inline on the AcceptedSplit message itself
+    // (see protocol/messages.py) rather than being reconstructed from
+    // separately-gossiped `score` events: `accepted_topic` and `score_topic`
+    // propagate independently with no ordering/delivery guarantee between
+    // them, so a pure subscriber like this dashboard can receive `accepted`
+    // while one or more of the votes behind it never arrives at all -- not
+    // just late. Falls back to the old reconstruction for any AcceptedSplit
+    // gossiped by a peer running before this field existed.
     const accepted = state.accepted.get(goalId);
     if (!accepted) return [];
+    if (accepted.confirming_scores && accepted.confirming_scores.length) {
+      return accepted.confirming_scores;
+    }
     const scores = state.scores.get(goalId) || [];
     return scores.filter((s) => s.proposal_id === accepted.proposal_id);
   }

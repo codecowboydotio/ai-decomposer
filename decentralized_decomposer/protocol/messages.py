@@ -100,6 +100,14 @@ class AcceptedSplit(BaseModel):
     proposal_id: str
     subgoals: list[str]
     final_score: float = Field(ge=0.0, le=1.0)
+    # The individual votes `final_score` was computed from. Carried inline
+    # rather than left for observers to reconstruct from separately-gossiped
+    # `ScoreMsg` events: `accepted_topic` and `score_topic` propagate
+    # independently over GossipSub with no ordering or delivery guarantee
+    # between them, so a pure subscriber (the dashboard) can easily receive
+    # `accepted` while one or more of the votes behind it never arrives (lost
+    # to gossip, not just late) -- see acceptance.py's AcceptanceTracker.
+    confirming_scores: list[ScoreMsg] = Field(default_factory=list)
 
 
 class PromptNode(BaseModel):

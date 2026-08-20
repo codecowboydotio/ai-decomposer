@@ -30,13 +30,16 @@ class AcceptanceTracker:
     def _scores_for(self, proposal_id: str) -> list[ScoreMsg]:
         return [s for s in self.scores if s.proposal_id == proposal_id]
 
-    def _accepted(self, proposal_id: str, final_score: float) -> AcceptedSplit:
+    def _accepted(
+        self, proposal_id: str, final_score: float, confirming_scores: list[ScoreMsg]
+    ) -> AcceptedSplit:
         proposal = self.proposals[proposal_id]
         return AcceptedSplit(
             goal_id=proposal.goal_id,
             proposal_id=proposal_id,
             subgoals=proposal.subgoals,
             final_score=final_score,
+            confirming_scores=confirming_scores,
         )
 
     def check(self, elapsed: float) -> AcceptedSplit | None:
@@ -66,18 +69,18 @@ class AcceptanceTracker:
             confirming_scores = [s for s in proposal_scores if s.score >= MIN_SCORE]
             if len({s.scorer_peer for s in confirming_scores}) >= N_CONFIRMATIONS:
                 mean_score = sum(s.score for s in confirming_scores) / len(confirming_scores)
-                return self._accepted(proposal_id, mean_score)
+                return self._accepted(proposal_id, mean_score, confirming_scores)
 
         if elapsed >= ACCEPT_TIMEOUT:
-            best: tuple[str, float] | None = None
+            best: tuple[str, float, list[ScoreMsg]] | None = None
             for proposal_id in self.proposals:
                 proposal_scores = self._scores_for(proposal_id)
                 if len(proposal_scores) < N_CONFIRMATIONS:
                     continue
                 mean_score = sum(s.score for s in proposal_scores) / len(proposal_scores)
                 if best is None or mean_score > best[1]:
-                    best = (proposal_id, mean_score)
+                    best = (proposal_id, mean_score, proposal_scores)
             if best is not None:
-                return self._accepted(best[0], best[1])
+                return self._accepted(best[0], best[1], best[2])
 
         return None
