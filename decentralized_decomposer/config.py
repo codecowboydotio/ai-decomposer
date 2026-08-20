@@ -24,7 +24,7 @@ MAX_SUBGOAL_SPLITS = int(os.environ.get("DD_MAX_SUBGOAL_SPLITS", 6))
 # --- Acceptance rule (spec §6) ---
 MIN_SCORE = float(os.environ.get("DD_MIN_SCORE", 0.6))
 N_CONFIRMATIONS = int(os.environ.get("DD_N_CONFIRMATIONS", 2))
-ACCEPT_TIMEOUT = float(os.environ.get("DD_ACCEPT_TIMEOUT", 30.0))  # seconds
+ACCEPT_TIMEOUT = float(os.environ.get("DD_ACCEPT_TIMEOUT", 45.0))  # seconds
 
 # --- Decomposer-side reproposal (not part of the spec; see README) ---
 # If a goal never converges on an accepted split (too-low scores, or too few

@@ -28,6 +28,60 @@ GOSSIPSUB_PROTOCOL_ID = TProtocol("/meshsub/1.0.0")
 M = TypeVar("M", bound=BaseModel)
 
 
+_MESSAGE_ALL_PEERS_RACE_RETRIES = 5
+
+
+def _patch_message_all_peers_dict_race() -> None:
+    """Work around a `self.peers` mutation race in py-libp2p's `Pubsub.message_all_peers`.
+
+    `subscribe()`/`unsubscribe()` both call it to broadcast an announcement,
+    and it does `for stream in self.peers.values(): await stream.write(...)`
+    -- a plain live-dict iteration with an `await` in the loop body. If a
+    sibling coroutine connects or drops a peer (mDNS discovery, dead-peer
+    pruning) while that write is suspended, `self.peers` changes size
+    mid-iteration and Python raises `RuntimeError: dictionary changed size
+    during iteration`, uncaught, taking down the whole trio nursery -- and
+    thus the whole agent process (this is what crashed a `--role dashboard`
+    process, which subscribes to a new topic per goal and so hits the race
+    far more often than the other roles).
+
+    Same category as `_retry_stream_broadcast` below (both work around
+    py-libp2p broadcast-path bugs from userland), but this one can't be
+    fixed by retrying the *caller* -- the crash happens inside
+    `message_all_peers` itself, before `_retry_stream_broadcast` gets a
+    chance to see anything. Simplest safe fix: wrap the method and retry the
+    whole broadcast if the dict-mutation race fires. A retry may re-message
+    a peer the first, partial pass already reached, but a duplicate
+    subscribe/unsubscribe announcement is harmless at the gossipsub level.
+    """
+    if getattr(Pubsub.message_all_peers, "_dd_patched", False):
+        return
+    original = Pubsub.message_all_peers
+
+    async def message_all_peers_retrying(self: Pubsub, raw_msg: bytes) -> None:
+        for attempt in range(_MESSAGE_ALL_PEERS_RACE_RETRIES + 1):
+            try:
+                await original(self, raw_msg)
+                return
+            except RuntimeError as exc:
+                if (
+                    "dictionary changed size during iteration" not in str(exc)
+                    or attempt >= _MESSAGE_ALL_PEERS_RACE_RETRIES
+                ):
+                    raise
+                logger.debug(
+                    "message_all_peers hit the peer-dict mutation race (attempt %d/%d); retrying",
+                    attempt + 1,
+                    _MESSAGE_ALL_PEERS_RACE_RETRIES + 1,
+                )
+
+    message_all_peers_retrying._dd_patched = True  # type: ignore[attr-defined]
+    Pubsub.message_all_peers = message_all_peers_retrying
+
+
+_patch_message_all_peers_dict_race()
+
+
 def build_pubsub(host: IHost) -> tuple[GossipSub, Pubsub]:
     """Construct GossipSub tuned for a handful of local-laptop peers (spec §2 scale)."""
     gossipsub = GossipSub(

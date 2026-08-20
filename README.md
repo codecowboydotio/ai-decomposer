@@ -182,6 +182,19 @@ the observer is better for watching the whole tree converge.
   announcement out after retrying, that's logged and swallowed rather than
   raised -- local subscription state is already torn down by that point,
   only the "tell peers we left" broadcast was missed.
+- **Retrying past the `message_all_peers` dict-mutation race.** The same
+  `subscribe`/`unsubscribe` broadcast also does a plain
+  `for stream in self.peers.values(): await stream.write(...)` -- if a
+  sibling coroutine connects or drops a peer while a write is suspended,
+  `self.peers` changes size mid-iteration and Python raises `RuntimeError:
+  dictionary changed size during iteration`, uncaught, crashing the whole
+  process. This hit hardest on `--role dashboard`, which subscribes to a
+  new topic per goal and so churns peers/subscriptions the most. Fixed the
+  same way as the `StreamReset` case above: `p2p/pubsub.py` patches
+  `Pubsub.message_all_peers` to retry the whole broadcast (up to 5 times)
+  when this specific `RuntimeError` fires. A retry may re-message a peer
+  the first, partial pass already reached, which is harmless at the
+  gossipsub level.
 - **Topic addressing is flatter than the literal §4 diagram.** GossipSub
   has no wildcard subscriptions, so a decomposer can't literally subscribe
   to `goal/*`. Every `Goal` -- top-level or a recursively-spawned subgoal
