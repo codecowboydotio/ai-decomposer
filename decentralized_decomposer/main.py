@@ -30,11 +30,13 @@ from libp2p.pubsub.gossipsub import GossipSub
 from libp2p.tools.async_service.trio_service import background_trio_service
 
 from decentralized_decomposer import config as dd_config
+from decentralized_decomposer.agents.dashboard_agent import DashboardAgent
 from decentralized_decomposer.agents.decomposer_agent import DecomposerAgent
 from decentralized_decomposer.agents.executor_agent import ExecutorAgent
 from decentralized_decomposer.agents.observer_agent import ObserverAgent
 from decentralized_decomposer.agents.scorer_agent import ScorerAgent
 from decentralized_decomposer.config import Capability
+from decentralized_decomposer.dashboard_server import EventBus, start_dashboard_server
 from decentralized_decomposer.p2p.crdt_state import PlanState
 from decentralized_decomposer.p2p.discovery import Discovery
 from decentralized_decomposer.p2p.host import build_host
@@ -48,7 +50,9 @@ logger = logging.getLogger(__name__)
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Decentralized goal decomposer agent")
     parser.add_argument(
-        "--role", required=True, choices=["decomposer", "scorer", "executor", "observer"]
+        "--role",
+        required=True,
+        choices=["decomposer", "scorer", "executor", "observer", "dashboard"],
     )
     parser.add_argument("--port", type=int, default=None)
     parser.add_argument(
@@ -108,6 +112,17 @@ def parse_args() -> argparse.Namespace:
             "(overwritten in full) every time the plan state changes"
         ),
     )
+    parser.add_argument(
+        "--dashboard-port",
+        type=int,
+        default=8765,
+        help="Dashboard role only: local HTTP port to serve the live UI on (default: 8765)",
+    )
+    parser.add_argument(
+        "--dashboard-host",
+        default="127.0.0.1",
+        help="Dashboard role only: host/interface to bind the UI's HTTP server to",
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     return parser.parse_args()
 
@@ -161,6 +176,10 @@ async def amain(args: argparse.Namespace) -> None:
     gossipsub, pubsub = build_pubsub(host)
     discovery = Discovery(host, port)
 
+    event_bus = EventBus()
+    if args.role == "dashboard":
+        start_dashboard_server(event_bus, host=args.dashboard_host, port=args.dashboard_port)
+
     async with AsyncAnthropic() as llm_client:
         async with host.run(listen_addrs=listen_addrs):
             try:
@@ -196,10 +215,12 @@ async def amain(args: argparse.Namespace) -> None:
                                 await ExecutorAgent(pubsub, peer_id, capabilities, llm_client).run(
                                     nursery
                                 )
-                            else:
+                            elif args.role == "observer":
                                 await ObserverAgent(
                                     pubsub, PlanState(), report_file=args.report_file
                                 ).run(nursery)
+                            else:
+                                await DashboardAgent(pubsub, event_bus).run(nursery)
 
                             if args.submit_goal:
                                 nursery.start_soon(

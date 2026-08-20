@@ -26,10 +26,31 @@ MIN_SCORE = float(os.environ.get("DD_MIN_SCORE", 0.6))
 N_CONFIRMATIONS = int(os.environ.get("DD_N_CONFIRMATIONS", 2))
 ACCEPT_TIMEOUT = float(os.environ.get("DD_ACCEPT_TIMEOUT", 30.0))  # seconds
 
+# --- Decomposer-side reproposal (not part of the spec; see README) ---
+# If a goal never converges on an accepted split (too-low scores, or too few
+# scorers running), the decomposer that proposed it republishes a fresh Goal
+# (new goal_id, same text) rather than leaving it stuck forever. Bounded so
+# a persistently-unscoreable goal fails loudly instead of looping forever.
+MAX_REPROPOSAL_ATTEMPTS = int(os.environ.get("DD_MAX_REPROPOSAL_ATTEMPTS", 2))
+# Extra wait past ACCEPT_TIMEOUT before giving up on convergence, so the
+# decomposer doesn't retry right as a scorer's own timeout-fallback accept
+# (which starts its clock slightly later) is about to land.
+REPROPOSAL_GRACE = float(os.environ.get("DD_REPROPOSAL_GRACE", 5.0))  # seconds
+
 # --- Claim protocol (spec §6, §6a) ---
 CLAIM_TIMESTAMP_TOLERANCE = float(os.environ.get("DD_CLAIM_TOLERANCE", 5.0))  # seconds
 CLAIM_TIMEOUT = float(os.environ.get("DD_CLAIM_TIMEOUT", 60.0))  # seconds, local-laptop default
 CLAIM_SETTLE_WINDOW = float(os.environ.get("DD_CLAIM_SETTLE_WINDOW", 2.0))  # time to wait for competing claims
+
+# --- Pubsub subscribe/unsubscribe resilience (not spec; py-libp2p workaround) ---
+# pubsub.subscribe()/unsubscribe() broadcast to every connected peer, and abort
+# the whole call if writing to any ONE peer whose connection died raises
+# StreamReset -- py-libp2p's own broadcast loop only catches the sibling
+# StreamClosed. See p2p/pubsub.py's subscribe_resilient/unsubscribe_resilient.
+MAX_PUBSUB_STREAM_RETRIES = int(os.environ.get("DD_MAX_PUBSUB_STREAM_RETRIES", 5))
+PUBSUB_STREAM_RETRY_BASE_DELAY = float(
+    os.environ.get("DD_PUBSUB_STREAM_RETRY_BASE_DELAY", 0.2)
+)  # seconds, doubles each retry
 
 # --- LLM retry policy (spec §6b) ---
 MAX_LLM_RETRIES = int(os.environ.get("DD_MAX_LLM_RETRIES", 3))

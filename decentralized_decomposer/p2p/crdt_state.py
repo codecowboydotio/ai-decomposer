@@ -91,6 +91,27 @@ class PlanState:
     def is_resolved(self, node_id: str) -> bool:
         return node_id in self.results
 
+    def _find_child_goal(self, parent_id: str, text: str) -> Goal | None:
+        """The goal with the given (parent_id, text), preferring one that has
+        an accepted split over one that doesn't.
+
+        Normally at most one goal ever matches. Two can match when the
+        decomposer's timeout-retry (agents/decomposer_agent.py) republishes a
+        stalled goal as a fresh goal_id with the same text/parent -- without
+        this preference, `next()` picking whichever was seen first would keep
+        resolving to the original, permanently-stuck goal even after the
+        retry actually converged.
+        """
+        fallback: Goal | None = None
+        for g in self.goals.values():
+            if g.parent_id != parent_id or g.text != text:
+                continue
+            if g.goal_id in self.accepted_splits:
+                return g
+            if fallback is None:
+                fallback = g
+        return fallback
+
     def reconstruct(self, goal_id: str) -> dict:
         """Best-effort local view of the decomposition subtree rooted at `goal_id`.
 
@@ -107,14 +128,7 @@ class PlanState:
 
         children = []
         for subgoal_text in accepted.subgoals:
-            child_goal = next(
-                (
-                    g
-                    for g in self.goals.values()
-                    if g.parent_id == goal_id and g.text == subgoal_text
-                ),
-                None,
-            )
+            child_goal = self._find_child_goal(goal_id, subgoal_text)
             if child_goal is not None:
                 children.append(self.reconstruct(child_goal.goal_id))
                 continue

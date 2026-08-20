@@ -30,12 +30,20 @@ from pydantic import BaseModel
 from decentralized_decomposer import config
 from decentralized_decomposer.llm import LLMCallFailed, call_structured
 from decentralized_decomposer.p2p.pubsub import publish_model, subscribe_and_validate
-from decentralized_decomposer.protocol.messages import FailureMsg, Goal, SubgoalProposal
+from decentralized_decomposer.protocol.messages import (
+    AcceptedSplit,
+    FailureMsg,
+    Goal,
+    ScoreMsg,
+    SubgoalProposal,
+)
 from decentralized_decomposer.protocol.topics import (
     NEW_GOAL_TOPIC,
+    accepted_topic,
     propose_failed_topic,
     propose_topic,
     root_prefix,
+    score_topic,
 )
 
 logger = logging.getLogger(__name__)
@@ -87,23 +95,156 @@ def validate_split_count(depth: int, draft: SubgoalDraft) -> None:
         )
 
 
+def _rejection_feedback(proposal: SubgoalProposal, scores: list[ScoreMsg]) -> str:
+    """Summarize why a proposal didn't converge, for the next attempt's prompt."""
+    subgoals_text = "; ".join(proposal.subgoals)
+    header = (
+        f"Your previous split into {len(proposal.subgoals)} subgoals ({subgoals_text}) "
+        "was not accepted in time."
+    )
+    if not scores:
+        return f"{header} No scorer feedback arrived -- try a clearer, more actionable split."
+    notes = [f"{s.score:.2f}" + (f" ({s.notes})" if s.notes else "") for s in scores]
+    return f"{header} Scorer feedback: {'; '.join(notes)}. Produce a different, improved split."
+
+
 class DecomposerAgent:
     def __init__(self, pubsub: Pubsub, peer_id: str, llm_client: AsyncAnthropic):
         self.pubsub = pubsub
         self.peer_id = peer_id
         self.llm = llm_client
+        self._seen_goals: set[str] = set()
+        self._nursery: trio.Nursery | None = None
 
     async def run(self, nursery: trio.Nursery) -> None:
+        self._nursery = nursery
         nursery.start_soon(self._handle_new_goals)
 
     async def _handle_new_goals(self) -> None:
+        assert self._nursery is not None
         async for goal in subscribe_and_validate(self.pubsub, NEW_GOAL_TOPIC, Goal):
             if goal.depth >= config.MAX_DEPTH:
                 logger.debug("Skipping decomposition of %s: already at MAX_DEPTH", goal.goal_id)
                 continue
-            await self.propose_split(goal)
+            if goal.goal_id in self._seen_goals:
+                # GossipSub gives no exactly-once delivery guarantee (see the
+                # identical guard on ExecutorAgent's node/new handling): without
+                # this, a duplicate delivery would spawn a second concurrent
+                # _propose_with_retry for the same goal_id, and both would end
+                # up watching the same accepted_topic subscription out from
+                # under each other.
+                continue
+            self._seen_goals.add(goal.goal_id)
+            self._nursery.start_soon(self._propose_with_retry, goal, 0)
 
-    async def propose_split(self, goal: Goal) -> SubgoalProposal | None:
+    async def _propose_with_retry(
+        self, goal: Goal, attempt: int, feedback: str | None = None
+    ) -> None:
+        """Propose a split for `goal`, then watch for it to actually converge.
+
+        Not part of the original spec: a proposal that never reaches
+        `N_CONFIRMATIONS` scorers at `MIN_SCORE` (or has too few scorers
+        running to ever confirm at all) otherwise leaves the goal stuck in
+        `pending_decomposition` forever. Here, if no accepted split shows up
+        within `ACCEPT_TIMEOUT` (+ a small grace buffer so we don't race a
+        scorer's own timeout-fallback accept), republish the same goal text
+        as a fresh `Goal` (a new goal_id, so this is a clean independent
+        acceptance cycle -- see README) and try again, up to
+        `MAX_REPROPOSAL_ATTEMPTS` times before giving up with a failure notice.
+
+        Retries aren't a blind re-roll: whatever scorer notes arrived for the
+        rejected proposal (or their absence) are fed back into the next
+        attempt's prompt, the same way `call_structured` feeds a schema error
+        back on retry -- otherwise a goal that's genuinely hard to split well
+        would likely just get re-scored the same way every time, burning all
+        its attempts without ever improving.
+        """
+        proposal = await self.propose_split(goal, feedback=feedback)
+        if proposal is None:
+            return  # propose_split already published a propose_failed notice
+
+        accepted, scores = await self._wait_for_outcome(goal.goal_id)
+        if accepted:
+            return
+
+        if attempt >= config.MAX_REPROPOSAL_ATTEMPTS:
+            logger.warning(
+                "Giving up on %s after %d proposal attempt(s) with no accepted split",
+                goal.goal_id,
+                attempt + 1,
+            )
+            await publish_model(
+                self.pubsub,
+                propose_failed_topic(root_prefix(goal.goal_id)),
+                FailureMsg(
+                    goal_id=goal.goal_id,
+                    role="decomposer",
+                    reason=(
+                        f"exhausted {config.MAX_REPROPOSAL_ATTEMPTS} reproposal attempt(s) "
+                        "without an accepted split"
+                    ),
+                ),
+            )
+            return
+
+        retry_goal = Goal.create(
+            text=goal.text,
+            origin_peer=self.peer_id,
+            parent_id=goal.parent_id,
+            depth=goal.depth,
+        )
+        logger.info(
+            "No accepted split for %s within %.0fs; re-proposing as %s (attempt %d/%d)",
+            goal.goal_id,
+            config.ACCEPT_TIMEOUT + config.REPROPOSAL_GRACE,
+            retry_goal.goal_id,
+            attempt + 2,
+            config.MAX_REPROPOSAL_ATTEMPTS + 1,
+        )
+        self._seen_goals.add(retry_goal.goal_id)
+        await publish_model(self.pubsub, NEW_GOAL_TOPIC, retry_goal)
+        assert self._nursery is not None
+        self._nursery.start_soon(
+            self._propose_with_retry,
+            retry_goal,
+            attempt + 1,
+            _rejection_feedback(proposal, scores),
+        )
+
+    async def _wait_for_outcome(self, goal_id: str) -> tuple[bool, list[ScoreMsg]]:
+        """Wait for `goal_id` to converge on an accepted split, or time out.
+
+        Returns (converged, scores observed for it in the meantime) -- the
+        scores are collected regardless of outcome so a timeout still has
+        something concrete to feed back into the next attempt's prompt.
+        """
+        prefix = root_prefix(goal_id)
+        send_done, recv_done = trio.open_memory_channel[None](1)
+        scores: list[ScoreMsg] = []
+
+        async def watch_accepted() -> None:
+            async for _ in subscribe_and_validate(self.pubsub, accepted_topic(prefix), AcceptedSplit):
+                try:
+                    send_done.send_nowait(None)
+                except trio.WouldBlock:
+                    pass
+                return
+
+        async def watch_scores() -> None:
+            async for score in subscribe_and_validate(self.pubsub, score_topic(prefix), ScoreMsg):
+                scores.append(score)
+
+        async with trio.open_nursery() as sub_nursery:
+            sub_nursery.start_soon(watch_accepted)
+            sub_nursery.start_soon(watch_scores)
+            with trio.move_on_after(config.ACCEPT_TIMEOUT + config.REPROPOSAL_GRACE) as scope:
+                await recv_done.receive()
+            sub_nursery.cancel_scope.cancel()
+            return not scope.cancelled_caught, scores
+
+    async def propose_split(
+        self, goal: Goal, feedback: str | None = None
+    ) -> SubgoalProposal | None:
         """Propose a split for `goal`. Returns None (and publishes a failure notice)
         if the LLM call/parse fails after retries -- never a guessed result (spec §6b).
         """
@@ -112,6 +253,8 @@ class DecomposerAgent:
             f"Depth: {goal.depth} (max {config.MAX_DEPTH})\n"
             f"Parent context: {goal.parent_id or 'none (top-level goal)'}"
         )
+        if feedback:
+            user_prompt += f"\n\n{feedback}"
         try:
             draft = await call_structured(
                 self.llm,

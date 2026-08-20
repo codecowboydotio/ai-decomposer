@@ -167,6 +167,21 @@ the observer is better for watching the whole tree converge.
   py-libp2p's mDNS listener (its discovered-peer address TTL is
   hardcoded to 10s) -- those fire on zeroconf's own background thread
   and don't affect the agent.
+- **Retrying past `StreamReset` on subscribe/unsubscribe.** `Pubsub.subscribe`
+  and `.unsubscribe` broadcast an announcement to every currently-connected
+  peer; if any *one* of them has a dead connection, py-libp2p's own
+  broadcast loop only catches `StreamClosed` and prunes that peer
+  gracefully -- the sibling `StreamReset` (same base class, not a
+  subclass) is left uncaught, aborting the whole call and crashing the
+  calling agent's process. Every agent goes through
+  `p2p/pubsub.py`'s `subscribe_and_validate`, so this fixes it once,
+  centrally: retry both calls with backoff (`DD_MAX_PUBSUB_STREAM_RETRIES`,
+  default 5; `DD_PUBSUB_STREAM_RETRY_BASE_DELAY`, default 0.2s, doubling),
+  which gives py-libp2p's own dead-peer sweep time to prune the stale
+  connection before the next attempt. If unsubscribe still can't get its
+  announcement out after retrying, that's logged and swallowed rather than
+  raised -- local subscription state is already torn down by that point,
+  only the "tell peers we left" broadcast was missed.
 - **Topic addressing is flatter than the literal §4 diagram.** GossipSub
   has no wildcard subscriptions, so a decomposer can't literally subscribe
   to `goal/*`. Every `Goal` -- top-level or a recursively-spawned subgoal
@@ -187,6 +202,25 @@ the observer is better for watching the whole tree converge.
   model-generated code on the host. Every capability's execution is a
   plain LLM completion returning text output. Building a real sandbox is
   future work, not a v1 scope call the spec makes explicitly.
+- **Decomposer-side reproposal on timeout.** Not part of the spec, added
+  on request. Without it, a goal whose proposal never reaches
+  `N_CONFIRMATIONS` scorers at `MIN_SCORE` -- too strict a `DD_MIN_SCORE`,
+  or just too few scorers running -- sits in `pending_decomposition`
+  forever with no way out. Now, the decomposer that proposed a split
+  watches for it to actually converge; if `DD_ACCEPT_TIMEOUT` (+ a
+  `DD_REPROPOSAL_GRACE` buffer, default 5s, so it doesn't race a scorer's
+  own timeout-fallback accept) passes with no accepted split, it
+  republishes the same goal text as a **fresh goal** (a new content-hashed
+  `goal_id`, so this is a clean independent acceptance cycle, not a
+  mutation of the stuck one) and tries again -- feeding whatever scorer
+  notes came back (or their absence) into the next attempt's prompt, the
+  same way `call_structured` already feeds a schema error back on retry.
+  Bounded by `DD_MAX_REPROPOSAL_ATTEMPTS` (default 2, so 3 proposals
+  total) before giving up with a `propose_failed` notice.
+  Because a retried goal shares `(parent_id, text)` with the original
+  stuck one, `PlanState.reconstruct` and the dashboard's tree view
+  deliberately prefer whichever of the two duplicates actually has an
+  accepted split, rather than whichever was seen first.
 
 ## Testing
 

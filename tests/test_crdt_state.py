@@ -95,6 +95,34 @@ def test_plan_state_reconstruct_full_tree_leaf_and_recursive_child():
     assert child_view["status"] == "pending_decomposition"
 
 
+def test_plan_state_reconstruct_prefers_accepted_goal_among_retried_duplicates():
+    """The decomposer's timeout-retry (agents/decomposer_agent.py) republishes a
+    stalled goal as a fresh goal_id with the same (parent_id, text) -- reconstruct
+    must resolve to whichever one actually converged, not whichever was seen first.
+    """
+    state = PlanState()
+    root = _goal("Build a todo app")
+    state.apply_goal(root)
+    state.apply_accepted(
+        AcceptedSplit(goal_id=root.goal_id, proposal_id="p1", subgoals=["Write the API"], final_score=0.9)
+    )
+
+    stale = _goal("Write the API", parent_id=root.goal_id, depth=1)  # never converges
+    retry = _goal("Write the API", parent_id=root.goal_id, depth=1)  # the reproposal
+    state.apply_goal(stale)
+    state.apply_goal(retry)
+    state.apply_accepted(
+        AcceptedSplit(
+            goal_id=retry.goal_id, proposal_id="p2", subgoals=["Write the endpoint"], final_score=0.85
+        )
+    )
+
+    tree = state.reconstruct(root.goal_id)
+    child_view = tree["subgoals"][0]
+    assert child_view["goal_id"] == retry.goal_id
+    assert child_view["status"] == "decomposed"
+
+
 def test_plan_state_merge_combines_independently_seen_deltas():
     root = _goal("Build a todo app")
 

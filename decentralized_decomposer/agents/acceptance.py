@@ -51,12 +51,21 @@ class AcceptanceTracker:
         via fallback). Proposal insertion order is the tie-break for (a) so
         the result is deterministic given an identical observed message
         sequence.
+
+        The reported `final_score` for (a) is the mean of only the
+        *confirming* votes (those >= MIN_SCORE), not every score observed
+        for the proposal -- a dissenting low score from a non-confirming
+        scorer shouldn't be able to drag a properly-confirmed proposal's
+        reported score below the threshold it was just confirmed against.
+        (b) intentionally keeps meaning over every observed score: it's a
+        "best available" fallback that can legitimately report a
+        below-threshold score when nothing better exists.
         """
         for proposal_id in self.proposals:
             proposal_scores = self._scores_for(proposal_id)
-            confirmations = {s.scorer_peer for s in proposal_scores if s.score >= MIN_SCORE}
-            if len(confirmations) >= N_CONFIRMATIONS:
-                mean_score = sum(s.score for s in proposal_scores) / len(proposal_scores)
+            confirming_scores = [s for s in proposal_scores if s.score >= MIN_SCORE]
+            if len({s.scorer_peer for s in confirming_scores}) >= N_CONFIRMATIONS:
+                mean_score = sum(s.score for s in confirming_scores) / len(confirming_scores)
                 return self._accepted(proposal_id, mean_score)
 
         if elapsed >= ACCEPT_TIMEOUT:

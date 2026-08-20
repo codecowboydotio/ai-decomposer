@@ -84,6 +84,32 @@ def test_n_confirmations_from_the_same_scorer_do_not_count_twice():
     assert tracker.check(elapsed=0.1) is None
 
 
+def test_accepted_final_score_means_only_confirming_votes_not_all():
+    # A dissenting scorer's low score shouldn't be able to drag the reported
+    # final_score below what the actually-confirming scorers gave.
+    tracker = AcceptanceTracker()
+    proposal = _proposal("a")
+    tracker.add_proposal(proposal)
+    confirming_scores = [min(1.0, MIN_SCORE + 0.2 + 0.05 * i) for i in range(N_CONFIRMATIONS)]
+    for i, score in enumerate(confirming_scores):
+        tracker.add_score(
+            ScoreMsg(goal_id="g1", proposal_id=proposal.proposal_id, scorer_peer=f"scorer-{i}", score=score)
+        )
+    tracker.add_score(
+        ScoreMsg(
+            goal_id="g1",
+            proposal_id=proposal.proposal_id,
+            scorer_peer="dissenter",
+            score=max(0.0, MIN_SCORE - 0.5),
+        )
+    )
+
+    result = tracker.check(elapsed=0.1)
+    assert result is not None
+    assert result.final_score == sum(confirming_scores) / len(confirming_scores)
+    assert result.final_score >= MIN_SCORE
+
+
 def test_timeout_falls_back_to_highest_mean_scored_proposal():
     # Scores are kept below MIN_SCORE so tier (b) confirmation never fires,
     # isolating the tier (c) timeout fallback behavior being tested here.
