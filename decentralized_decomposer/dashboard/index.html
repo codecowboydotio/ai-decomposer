@@ -1,0 +1,914 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Decentralized Decomposer — Live Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {
+    --bg: #0b0f17;
+    --panel: #121826;
+    --panel-2: #171f30;
+    --border: #232d42;
+    --text: #e6ebf5;
+    --muted: #8a95ab;
+    --accent: #38bdf8;
+    --good: #22c55e;
+    --bad: #ef4444;
+    --warn: #f59e0b;
+    --decomposer: #f59e0b;
+    --scorer: #8b5cf6;
+    --executor: #22c55e;
+    --other: #64748b;
+    --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  body { display: flex; flex-direction: column; }
+
+  header {
+    display: flex; align-items: center; gap: 16px;
+    padding: 10px 18px; border-bottom: 1px solid var(--border);
+    background: var(--panel); flex: 0 0 auto;
+  }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; letter-spacing: 0.2px; }
+  header h1 span { color: var(--muted); font-weight: 400; }
+  .status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bad); transition: background .2s; }
+  .dot.connected { background: var(--good); box-shadow: 0 0 6px var(--good); }
+  .dot.connecting { background: var(--warn); }
+  .spacer { flex: 1; }
+  .stat-strip { display: flex; gap: 10px; flex-wrap: wrap; font-size: 11px; color: var(--muted); }
+  .stat-strip b { color: var(--text); font-variant-numeric: tabular-nums; }
+  .thresholds { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted); }
+  .thresholds input {
+    width: 52px; background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 4px; padding: 2px 5px; font-size: 11px; font-family: var(--mono);
+  }
+
+  main {
+    flex: 1 1 auto; display: grid; min-height: 0;
+    grid-template-columns: 240px 1fr 380px;
+    gap: 10px; padding: 10px;
+  }
+  .col { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+
+  .panel {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  .panel-title {
+    padding: 8px 12px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px;
+    color: var(--muted); border-bottom: 1px solid var(--border); flex: 0 0 auto;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .panel-body { padding: 8px 10px; overflow: auto; flex: 1 1 auto; }
+
+  #peersPanel { flex: 0 0 auto; max-height: 40%; }
+  #legendPanel { flex: 0 0 auto; }
+  #flowPanel { flex: 0 0 auto; height: 220px; }
+  #logPanel { flex: 1 1 auto; min-height: 100px; }
+  #outputsPanel { flex: 1 1 58%; min-height: 200px; }
+  #goalsPanel { flex: 1 1 42%; min-height: 140px; }
+
+  .panel-title-actions { display: flex; align-items: center; gap: 8px; }
+  .icon-btn {
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--muted);
+    width: 20px; height: 20px; border-radius: 5px; cursor: pointer; flex: 0 0 auto;
+    display: flex; align-items: center; justify-content: center; font-size: 12px; line-height: 1;
+    padding: 0;
+  }
+  .icon-btn:hover { color: var(--text); border-color: var(--accent); }
+
+  .modal-backdrop { position: fixed; inset: 0; background: rgba(3, 6, 12, 0.65); z-index: 999; }
+  .panel.maximized {
+    position: fixed; inset: 4vh 5vw; z-index: 1000; max-height: none;
+    box-shadow: 0 24px 64px rgba(0,0,0,0.55);
+  }
+
+  .peer-card {
+    display: flex; align-items: center; gap: 8px; padding: 5px 4px; border-radius: 6px;
+    font-size: 12px;
+  }
+  .peer-card:hover { background: var(--panel-2); }
+  .role-dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
+  .peer-id { font-family: var(--mono); color: var(--text); }
+  .peer-meta { color: var(--muted); font-size: 10px; margin-left: auto; text-align: right; }
+  .role-badge {
+    font-size: 9px; padding: 1px 5px; border-radius: 999px; border: 1px solid currentColor;
+    text-transform: uppercase; letter-spacing: 0.3px;
+  }
+
+  .legend-row { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); padding: 2px 0; }
+
+  svg#flowSvg { width: 100%; height: 100%; display: block; }
+  .peer-node-label { fill: var(--text); font-size: 8px; font-family: var(--mono); }
+  .hub-label { fill: var(--muted); font-size: 8px; }
+
+  .log-row {
+    display: grid; grid-template-columns: 58px 78px 1fr; gap: 8px; align-items: baseline;
+    padding: 3px 2px; font-size: 11.5px; border-bottom: 1px solid rgba(255,255,255,0.03);
+    cursor: pointer;
+  }
+  .log-row:hover { background: var(--panel-2); }
+  .log-ts { color: var(--muted); font-family: var(--mono); font-size: 10px; }
+  .kind-badge {
+    font-size: 9.5px; padding: 1px 6px; border-radius: 4px; text-align: center;
+    font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.3px;
+    border: 1px solid currentColor;
+  }
+  .log-summary { color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .log-summary .peer-tag { color: var(--muted); font-family: var(--mono); font-size: 10px; margin-right: 5px; }
+  .log-detail {
+    grid-column: 1 / -1; font-family: var(--mono); font-size: 10.5px; color: var(--muted);
+    white-space: pre-wrap; word-break: break-all; padding: 4px 2px 8px 66px; display: none;
+  }
+  .log-row.open .log-detail { display: block; }
+
+  .filters { display: flex; gap: 4px; flex-wrap: wrap; }
+  .filters button {
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--muted);
+    font-size: 9.5px; padding: 2px 7px; border-radius: 999px; cursor: pointer;
+  }
+  .filters button.active { color: var(--bg); background: var(--accent); border-color: var(--accent); }
+
+  .outline-tree { font-size: 12.5px; }
+  .outline-row { padding: 3px 6px; border-radius: 4px; border-left: 2px solid transparent; white-space: normal; }
+  .outline-row:hover { background: var(--panel-2); }
+  .outline-root { font-weight: 700; font-size: 13.5px; color: var(--text); padding-left: 6px !important; margin-bottom: 2px; }
+  .outline-attrib { color: var(--muted); font-size: 10.5px; font-family: var(--mono); white-space: nowrap; }
+  .outline-attrib.fail { color: var(--bad); }
+  .outline-pending { color: var(--warn); font-style: italic; font-size: 11.5px; }
+  .outline-status { font-size: 9.5px; margin-left: 4px; }
+  .outline-status.done { color: var(--good); }
+  .outline-status.failed { color: var(--bad); }
+  .outline-status.pending { color: var(--warn); }
+
+  .goal-card { border: 1px solid var(--border); border-radius: 6px; padding: 8px 9px; margin-bottom: 8px; background: var(--panel-2); }
+  .goal-text { font-size: 12.5px; margin-bottom: 4px; }
+  .goal-meta { font-size: 10px; color: var(--muted); margin-bottom: 6px; }
+  .status-pill {
+    font-size: 9.5px; padding: 1px 6px; border-radius: 999px; text-transform: uppercase;
+    letter-spacing: 0.3px; border: 1px solid currentColor;
+  }
+  .status-pending_decomposition { color: var(--warn); }
+  .status-decomposed { color: var(--accent); }
+  .status-pending_execution { color: var(--warn); }
+  .status-done { color: var(--good); }
+  .status-failed, .status-unknown { color: var(--bad); }
+
+  .proposal-block { margin: 6px 0; padding: 6px; background: var(--panel); border-radius: 5px; border: 1px solid var(--border); }
+  .proposal-head { font-size: 10.5px; color: var(--muted); display: flex; justify-content: space-between; }
+  .vote-row { display: flex; align-items: center; gap: 6px; font-size: 10.5px; margin-top: 3px; }
+  .vote-score { font-family: var(--mono); padding: 0 4px; border-radius: 3px; }
+  .vote-score.pass { color: var(--good); }
+  .vote-score.fail { color: var(--bad); }
+  .confirm-bar { height: 4px; border-radius: 2px; background: var(--border); margin-top: 4px; overflow: hidden; }
+  .confirm-bar-fill { height: 100%; background: var(--accent); transition: width .3s; }
+
+  .children { margin-left: 12px; padding-left: 10px; border-left: 1px dashed var(--border); margin-top: 6px; }
+  .node-block { font-size: 11.5px; margin: 5px 0; }
+  .node-result { font-family: var(--mono); font-size: 11px; line-height: 1.5; color: var(--text); margin-top: 3px; white-space: pre-wrap; word-break: break-word; max-height: 140px; overflow: auto; background: var(--panel); padding: 6px 7px; border-radius: 4px; border: 1px solid var(--border); }
+  .claim-tag { font-family: var(--mono); font-size: 9.5px; color: var(--muted); }
+
+  .empty-hint { color: var(--muted); font-size: 12px; padding: 20px 4px; text-align: center; }
+
+  #outputSearch {
+    width: 100%; background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 5px; padding: 5px 8px; font-size: 11.5px; font-family: inherit;
+  }
+  #outputSearch:focus { outline: none; border-color: var(--accent); }
+  #outputCount { font-family: var(--mono); font-size: 10px; }
+
+  .output-card { border: 1px solid var(--border); border-radius: 7px; padding: 9px 10px; margin-bottom: 9px; background: var(--panel-2); }
+  .output-card.failed { border-color: rgba(239,68,68,0.4); }
+  .output-head { display: flex; align-items: center; gap: 8px; font-size: 10px; color: var(--muted); margin-bottom: 4px; }
+  .output-peer { font-family: var(--mono); }
+  .output-ts { margin-left: auto; font-family: var(--mono); }
+  .output-breadcrumb { font-size: 10px; color: var(--muted); margin-bottom: 3px; }
+  .output-title { font-size: 13px; font-weight: 600; margin-bottom: 6px; color: var(--text); }
+  .output-body {
+    font-family: var(--mono); font-size: 12px; line-height: 1.55; color: var(--text);
+    background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px 9px; white-space: pre-wrap; word-break: break-word;
+    max-height: 240px; overflow: auto;
+  }
+  .output-body.expanded { max-height: none; }
+  .output-actions { display: flex; gap: 6px; margin-top: 7px; }
+  .mini-btn {
+    background: var(--panel); border: 1px solid var(--border); color: var(--muted);
+    font-size: 10px; padding: 3px 9px; border-radius: 5px; cursor: pointer;
+  }
+  .mini-btn:hover { color: var(--text); border-color: var(--accent); }
+
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Decentralized Decomposer <span>— live interaction dashboard</span></h1>
+  <div class="status"><span id="connDot" class="dot connecting"></span><span id="connLabel">connecting…</span></div>
+  <div class="stat-strip" id="statStrip"></div>
+  <div class="spacer"></div>
+  <div class="thresholds">
+    min score ≥ <input id="minScoreInput" type="number" step="0.05" min="0" max="1" value="0.6" />
+    confirmations ≥ <input id="nConfirmInput" type="number" step="1" min="1" value="2" />
+  </div>
+</header>
+
+<main>
+  <div class="col">
+    <div class="panel" id="peersPanel">
+      <div class="panel-title">Peers <span id="peerCount">0</span></div>
+      <div class="panel-body" id="peersBody"><div class="empty-hint">Waiting for agents…</div></div>
+    </div>
+    <div class="panel" id="legendPanel">
+      <div class="panel-title">Legend</div>
+      <div class="panel-body">
+        <div class="legend-row"><span class="role-dot" style="background:var(--decomposer)"></span>decomposer — proposes splits</div>
+        <div class="legend-row"><span class="role-dot" style="background:var(--scorer)"></span>scorer — votes on splits</div>
+        <div class="legend-row"><span class="role-dot" style="background:var(--executor)"></span>executor — claims &amp; runs nodes</div>
+        <div class="legend-row"><span class="role-dot" style="background:var(--other)"></span>observer / unknown</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col">
+    <div class="panel" id="flowPanel">
+      <div class="panel-title">Message flow</div>
+      <div class="panel-body" style="padding:0;">
+        <svg id="flowSvg" viewBox="0 0 480 260"></svg>
+      </div>
+    </div>
+    <div class="panel" id="logPanel">
+      <div class="panel-title">
+        Interaction log
+        <div class="filters" id="logFilters"></div>
+      </div>
+      <div class="panel-body" id="logBody"></div>
+    </div>
+  </div>
+
+  <div class="col">
+    <div class="panel" id="outputsPanel">
+      <div class="panel-title">
+        Outputs
+        <span id="outputCount">0 done · 0 failed</span>
+      </div>
+      <div style="padding:8px 10px 0;">
+        <input id="outputSearch" type="text" placeholder="Filter outputs by task or content…" />
+      </div>
+      <div class="panel-body" id="outputsBody"><div class="empty-hint">No completed outputs yet.</div></div>
+    </div>
+    <div class="panel" id="goalsPanel">
+      <div class="panel-title">
+        Goals · voting · plan tree
+        <div class="panel-title-actions">
+          <div class="filters" id="goalsViewToggle">
+            <button data-view="outline" class="active">Outline</button>
+            <button data-view="tree">Detailed</button>
+          </div>
+          <button id="goalsMaximizeBtn" class="icon-btn" type="button" title="Maximize" aria-label="Maximize plan tree">⤢</button>
+        </div>
+      </div>
+      <div class="panel-body" id="goalsBody"><div class="empty-hint">No goals submitted yet. Run a decomposer with --submit-goal.</div></div>
+    </div>
+  </div>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  const ROLE_COLOR = {
+    decomposer: "var(--decomposer)",
+    scorer: "var(--scorer)",
+    executor: "var(--executor)",
+    observer: "var(--other)",
+    unknown: "var(--other)",
+  };
+  const KIND_COLOR = {
+    goal: "var(--decomposer)", proposal: "var(--decomposer)",
+    score: "var(--scorer)", accepted: "var(--good)",
+    node: "var(--accent)", claim: "var(--executor)", result: "var(--executor)",
+    capability: "var(--other)",
+    propose_failed: "var(--bad)", score_failed: "var(--bad)", node_failed: "var(--bad)",
+  };
+
+  // ---- client-side protocol state, mirrors PlanState.reconstruct (p2p/crdt_state.py) ----
+  const state = {
+    peers: new Map(),       // peer_id -> {id, roles:Set, capabilities:Set, count, lastTs}
+    goals: new Map(),       // goal_id -> Goal
+    roots: new Set(),
+    proposals: new Map(),   // goal_id -> Map(proposal_id -> proposal)
+    scores: new Map(),      // goal_id -> Array<score>
+    accepted: new Map(),    // goal_id -> AcceptedSplit
+    goalFailures: new Map(),// goal_id -> Array<failure>
+    nodes: new Map(),       // node_id -> node
+    claims: new Map(),      // node_id -> Array<claim>
+    results: new Map(),     // node_id -> result
+    nodeFailures: new Map(),// node_id -> failure event
+    resultMeta: new Map(),  // node_id -> {ts, peer}
+    outputsOrder: [],       // node_id, oldest -> newest (result or node_failed, whichever landed)
+  };
+
+  let totalEvents = 0;
+  const kindCounts = {};
+  let replayDone = false;
+  let activeFilter = null;
+  let outputFilter = "";
+  const seenKinds = [];
+
+  function getPeer(id) {
+    if (!id) return null;
+    let p = state.peers.get(id);
+    if (!p) {
+      p = { id, roles: new Set(), capabilities: new Set(), count: 0, lastTs: null };
+      state.peers.set(id, p);
+    }
+    return p;
+  }
+
+  function touchPeer(id, role, ts) {
+    const p = getPeer(id);
+    if (!p) return;
+    if (role) p.roles.add(role);
+    p.count += 1;
+    p.lastTs = ts;
+  }
+
+  function mapListPush(map, key, value) {
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(value);
+  }
+
+  // ---------------------------------------------------------------- ingest
+  function applyEvent(evt) {
+    const ts = evt.ts || new Date().toISOString();
+    switch (evt.kind) {
+      case "capability": {
+        const p = getPeer(evt.peer);
+        p.roles.add("executor");
+        (evt.data.capabilities || []).forEach((c) => p.capabilities.add(c));
+        touchPeer(evt.peer, "executor", ts);
+        break;
+      }
+      case "goal": {
+        state.goals.set(evt.goal_id, evt.data);
+        if (!evt.data.parent_id) state.roots.add(evt.goal_id);
+        touchPeer(evt.peer, evt.role_hint, ts);
+        break;
+      }
+      case "proposal": {
+        if (!state.proposals.has(evt.goal_id)) state.proposals.set(evt.goal_id, new Map());
+        state.proposals.get(evt.goal_id).set(evt.data.proposal_id, evt.data);
+        touchPeer(evt.peer, "decomposer", ts);
+        break;
+      }
+      case "score": {
+        mapListPush(state.scores, evt.goal_id, evt.data);
+        touchPeer(evt.peer, "scorer", ts);
+        break;
+      }
+      case "accepted": {
+        state.accepted.set(evt.goal_id, evt.data);
+        break;
+      }
+      case "propose_failed":
+      case "score_failed": {
+        mapListPush(state.goalFailures, evt.goal_id, evt);
+        break;
+      }
+      case "node": {
+        state.nodes.set(evt.node_id, evt.data);
+        break;
+      }
+      case "claim": {
+        mapListPush(state.claims, evt.node_id, evt.data);
+        touchPeer(evt.peer, "executor", ts);
+        break;
+      }
+      case "result": {
+        state.results.set(evt.node_id, evt.data);
+        state.resultMeta.set(evt.node_id, { ts, peer: evt.peer });
+        state.outputsOrder.push(evt.node_id);
+        touchPeer(evt.peer, "executor", ts);
+        break;
+      }
+      case "node_failed": {
+        state.nodeFailures.set(evt.node_id, evt);
+        state.resultMeta.set(evt.node_id, { ts, peer: evt.peer });
+        state.outputsOrder.push(evt.node_id);
+        break;
+      }
+      default:
+        return; // e.g. _replay_complete: state-only marker, not a display event
+    }
+
+    totalEvents += 1;
+    kindCounts[evt.kind] = (kindCounts[evt.kind] || 0) + 1;
+    if (!seenKinds.includes(evt.kind)) { seenKinds.push(evt.kind); renderFilters(); }
+    appendLogRow(evt, ts);
+    if (replayDone) pulseFlow(evt);
+  }
+
+  // ---------------------------------------------------------------- peers panel
+  function renderPeers() {
+    const body = document.getElementById("peersBody");
+    document.getElementById("peerCount").textContent = state.peers.size;
+    if (state.peers.size === 0) {
+      body.innerHTML = '<div class="empty-hint">Waiting for agents…</div>';
+      return;
+    }
+    const rows = [...state.peers.values()]
+      .sort((a, b) => (b.lastTs || "").localeCompare(a.lastTs || ""))
+      .map((p) => {
+        const role = primaryRole(p);
+        const caps = [...p.capabilities].join(", ");
+        return `<div class="peer-card">
+          <span class="role-dot" style="background:${ROLE_COLOR[role]}"></span>
+          <span class="peer-id" title="${p.id}">${shortId(p.id)}</span>
+          <span class="role-badge" style="color:${ROLE_COLOR[role]}">${role}</span>
+          <span class="peer-meta">${p.count} msgs${caps ? " · " + esc(caps) : ""}</span>
+        </div>`;
+      });
+    body.innerHTML = rows.join("");
+  }
+
+  function primaryRole(p) {
+    for (const r of ["executor", "decomposer", "scorer", "observer"]) {
+      if (p.roles.has(r)) return r;
+    }
+    return "unknown";
+  }
+
+  function shortId(id) {
+    if (!id) return "?";
+    return id.length > 14 ? id.slice(0, 6) + "…" + id.slice(-4) : id;
+  }
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  }
+
+  // ---------------------------------------------------------------- flow viz
+  let flowLayout = new Map(); // peer_id -> {x,y}
+  function layoutFlow() {
+    const svg = document.getElementById("flowSvg");
+    const ids = [...state.peers.keys()];
+    const cx = 240, cy = 130, r = 100;
+    flowLayout = new Map();
+    ids.forEach((id, i) => {
+      const angle = (i / Math.max(ids.length, 1)) * Math.PI * 2 - Math.PI / 2;
+      flowLayout.set(id, { x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) });
+    });
+
+    let svgHtml = `<circle cx="${cx}" cy="${cy}" r="14" fill="var(--panel-2)" stroke="var(--border)"/>
+      <text x="${cx}" y="${cy + 3}" text-anchor="middle" class="hub-label">gossip</text>`;
+    for (const [id, pos] of flowLayout) {
+      const role = primaryRole(getPeer(id));
+      svgHtml += `<line x1="${pos.x}" y1="${pos.y}" x2="${cx}" y2="${cy}" stroke="var(--border)" stroke-width="1"/>
+        <circle cx="${pos.x}" cy="${pos.y}" r="8" fill="${ROLE_COLOR[role]}" fill-opacity="0.85"/>
+        <text x="${pos.x}" y="${pos.y - 12}" text-anchor="middle" class="peer-node-label">${shortId(id)}</text>`;
+    }
+    svg.innerHTML = svgHtml;
+  }
+
+  function pulseFlow(evt) {
+    if (!evt.peer) {
+      // no single origin peer (e.g. an accepted split) -- pulse the hub itself
+      flashHub();
+      return;
+    }
+    if (!flowLayout.has(evt.peer)) layoutFlow();
+    const pos = flowLayout.get(evt.peer);
+    if (!pos) return;
+    const svg = document.getElementById("flowSvg");
+    const ns = "http://www.w3.org/2000/svg";
+    const dot = document.createElementNS(ns, "circle");
+    dot.setAttribute("r", "4");
+    dot.setAttribute("fill", KIND_COLOR[evt.kind] || "var(--accent)");
+    dot.setAttribute("cx", pos.x);
+    dot.setAttribute("cy", pos.y);
+    const anim = document.createElementNS(ns, "animate");
+    anim.setAttribute("attributeName", "cx");
+    anim.setAttribute("from", pos.x); anim.setAttribute("to", "240");
+    anim.setAttribute("dur", "0.7s"); anim.setAttribute("fill", "freeze");
+    const anim2 = document.createElementNS(ns, "animate");
+    anim2.setAttribute("attributeName", "cy");
+    anim2.setAttribute("from", pos.y); anim2.setAttribute("to", "130");
+    anim2.setAttribute("dur", "0.7s"); anim2.setAttribute("fill", "freeze");
+    const fade = document.createElementNS(ns, "animate");
+    fade.setAttribute("attributeName", "opacity");
+    fade.setAttribute("from", "1"); fade.setAttribute("to", "0");
+    fade.setAttribute("begin", "0.5s"); fade.setAttribute("dur", "0.3s"); fade.setAttribute("fill", "freeze");
+    dot.appendChild(anim); dot.appendChild(anim2); dot.appendChild(fade);
+    svg.appendChild(dot);
+    setTimeout(() => dot.remove(), 850);
+  }
+
+  function flashHub() {
+    const svg = document.getElementById("flowSvg");
+    const ns = "http://www.w3.org/2000/svg";
+    const ring = document.createElementNS(ns, "circle");
+    ring.setAttribute("cx", "240"); ring.setAttribute("cy", "130"); ring.setAttribute("r", "14");
+    ring.setAttribute("fill", "none"); ring.setAttribute("stroke", "var(--good)"); ring.setAttribute("stroke-width", "2");
+    const anim = document.createElementNS(ns, "animate");
+    anim.setAttribute("attributeName", "r"); anim.setAttribute("from", "14"); anim.setAttribute("to", "40");
+    anim.setAttribute("dur", "0.6s"); anim.setAttribute("fill", "freeze");
+    const fade = document.createElementNS(ns, "animate");
+    fade.setAttribute("attributeName", "opacity"); fade.setAttribute("from", "1"); fade.setAttribute("to", "0");
+    fade.setAttribute("dur", "0.6s"); fade.setAttribute("fill", "freeze");
+    ring.appendChild(anim); ring.appendChild(fade);
+    svg.appendChild(ring);
+    setTimeout(() => ring.remove(), 650);
+  }
+
+  // ---------------------------------------------------------------- log
+  function renderFilters() {
+    const el = document.getElementById("logFilters");
+    const kinds = [null, ...seenKinds];
+    el.innerHTML = kinds.map((k) => {
+      const label = k === null ? "all" : k;
+      const cls = activeFilter === k ? "active" : "";
+      return `<button data-kind="${k === null ? "" : k}" class="${cls}">${label}</button>`;
+    }).join("");
+    [...el.children].forEach((btn) => btn.onclick = () => {
+      activeFilter = btn.dataset.kind || null;
+      renderFilters();
+      [...document.getElementById("logBody").children].forEach((row) => {
+        row.style.display = (!activeFilter || row.dataset.kind === activeFilter) ? "" : "none";
+      });
+    });
+  }
+
+  function appendLogRow(evt, ts) {
+    const body = document.getElementById("logBody");
+    const row = document.createElement("div");
+    row.className = "log-row";
+    row.dataset.kind = evt.kind;
+    if (activeFilter && evt.kind !== activeFilter) row.style.display = "none";
+    const time = ts.includes("T") ? ts.split("T")[1].replace("Z", "").slice(0, 8) : ts;
+    const peerTag = evt.peer ? `<span class="peer-tag">${shortId(evt.peer)}</span>` : "";
+    row.innerHTML = `<span class="log-ts">${time}</span>
+      <span class="kind-badge" style="color:${KIND_COLOR[evt.kind] || "var(--muted)"}">${evt.kind}</span>
+      <span class="log-summary">${peerTag}${esc(evt.summary || "")}</span>
+      <div class="log-detail"></div>`;
+    row.onclick = () => {
+      row.classList.toggle("open");
+      const detail = row.querySelector(".log-detail");
+      if (row.classList.contains("open") && !detail.textContent) {
+        detail.textContent = JSON.stringify(evt.data ?? {}, null, 2);
+      }
+    };
+    body.appendChild(row);
+    const nearBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 80;
+    if (nearBottom) body.scrollTop = body.scrollHeight;
+    while (body.children.length > 500) body.removeChild(body.firstChild);
+  }
+
+  // ---------------------------------------------------------------- goals / voting / tree
+  function findChildGoal(goalId, text) {
+    // Prefer a match that has an accepted split: the decomposer's timeout
+    // retry republishes a stalled goal under a fresh goal_id with the same
+    // (parent_id, text), so two goals can match here -- the original,
+    // permanently-stuck one and the retry that actually converged.
+    let fallback = null;
+    for (const g of state.goals.values()) {
+      if (g.parent_id !== goalId || g.text !== text) continue;
+      if (state.accepted.has(g.goal_id)) return g;
+      if (!fallback) fallback = g;
+    }
+    return fallback;
+  }
+  function findNode(goalId, text) {
+    for (const n of state.nodes.values()) {
+      if (n.goal_id === goalId && n.text === text) return n;
+    }
+    return null;
+  }
+
+  function votingSummary(goalId) {
+    const minScore = parseFloat(document.getElementById("minScoreInput").value) || 0.6;
+    const nConfirm = parseInt(document.getElementById("nConfirmInput").value, 10) || 2;
+    const proposals = state.proposals.get(goalId);
+    if (!proposals || proposals.size === 0) return "";
+    const scores = state.scores.get(goalId) || [];
+    let html = "";
+    for (const p of proposals.values()) {
+      const pScores = scores.filter((s) => s.proposal_id === p.proposal_id);
+      const confirmations = new Set(pScores.filter((s) => s.score >= minScore).map((s) => s.scorer_peer));
+      const pct = Math.min(100, (confirmations.size / nConfirm) * 100);
+      html += `<div class="proposal-block">
+        <div class="proposal-head"><span>${p.subgoals.length} subgoals · by ${shortId(p.proposer_peer)}</span>
+        <span>${confirmations.size}/${nConfirm} confirmations</span></div>
+        <div class="confirm-bar"><div class="confirm-bar-fill" style="width:${pct}%"></div></div>
+        ${pScores.map((s) => `<div class="vote-row">
+            <span class="claim-tag">${shortId(s.scorer_peer)}</span>
+            <span class="vote-score ${s.score >= minScore ? "pass" : "fail"}">${s.score.toFixed(2)}</span>
+            ${s.notes ? `<span style="color:var(--muted)">${esc(s.notes)}</span>` : ""}
+          </div>`).join("")}
+      </div>`;
+    }
+    const failures = state.goalFailures.get(goalId) || [];
+    failures.forEach((f) => {
+      html += `<div class="proposal-block" style="border-color:var(--bad)">
+        <span style="color:var(--bad)">${esc(f.summary)}</span></div>`;
+    });
+    return html;
+  }
+
+  function acceptedVotes(goalId) {
+    const accepted = state.accepted.get(goalId);
+    if (!accepted) return [];
+    const scores = state.scores.get(goalId) || [];
+    return scores.filter((s) => s.proposal_id === accepted.proposal_id);
+  }
+
+  function renderNode(goalId, text) {
+    const childGoal = findChildGoal(goalId, text);
+    if (childGoal) return renderGoal(childGoal.goal_id);
+
+    const node = findNode(goalId, text);
+    if (!node) return `<div class="node-block">${esc(text)} <span class="status-pill status-unknown">unknown</span></div>`;
+
+    const result = state.results.get(node.node_id);
+    const failure = state.nodeFailures.get(node.node_id);
+    const claims = state.claims.get(node.node_id) || [];
+    const status = failure ? "failed" : result ? "done" : "pending_execution";
+    let html = `<div class="node-block">${esc(node.text)}
+      <span class="status-pill status-${status}">${status.replace("_", " ")}</span>`;
+    if (claims.length) {
+      html += `<div class="claim-tag">claimed by ${claims.map((c) => shortId(c.claimer_peer)).join(", ")}</div>`;
+    }
+    if (result) {
+      html += `<div class="node-result">${esc(result.output).slice(0, 2000)}</div>`;
+    }
+    if (failure) {
+      html += `<div class="node-result" style="color:var(--bad)">${esc(failure.summary)}</div>`;
+    }
+    html += `</div>`;
+    return html;
+  }
+
+  function renderGoal(goalId) {
+    const goal = state.goals.get(goalId);
+    const accepted = state.accepted.get(goalId);
+    const text = goal ? goal.text : goalId;
+    if (!accepted) {
+      return `<div class="goal-card">
+        <div class="goal-text">${esc(text)}</div>
+        <div class="goal-meta">depth ${goal ? goal.depth : "?"} · <span class="status-pill status-pending_decomposition">pending decomposition</span></div>
+        ${votingSummary(goalId)}
+      </div>`;
+    }
+    const children = accepted.subgoals.map((t) => renderNode(goalId, t)).join("");
+    const minScore = parseFloat(document.getElementById("minScoreInput").value) || 0.6;
+    const votes = acceptedVotes(goalId);
+    const votesHtml = votes.length
+      ? `<div class="proposal-block">
+          <div class="proposal-head"><span>real votes behind this score</span></div>
+          ${votes.map((s) => `<div class="vote-row">
+              <span class="claim-tag">${shortId(s.scorer_peer)}</span>
+              <span class="vote-score ${s.score >= minScore ? "pass" : "fail"}">${s.score.toFixed(2)}</span>
+              ${s.notes ? `<span style="color:var(--muted)">${esc(s.notes)}</span>` : ""}
+            </div>`).join("")}
+        </div>`
+      : "";
+    return `<div class="goal-card">
+      <div class="goal-text">${esc(text)}</div>
+      <div class="goal-meta">depth ${goal ? goal.depth : "?"} · <span class="status-pill status-decomposed">decomposed</span> · accepted score ${accepted.final_score.toFixed(2)}</div>
+      ${votesHtml}
+      <div class="children">${children}</div>
+    </div>`;
+  }
+
+  // Compact "goal / subgoal <- agent, score" view: agent+score are the
+  // decomposer that proposed the accepted split each subgoal came from, and
+  // that split's accepted score -- every subgoal in one split shares the
+  // same attribution, since they were proposed and accepted together.
+  function renderOutline(goalId, depth) {
+    const goal = state.goals.get(goalId);
+    const rows = [];
+    if (depth === 0) {
+      rows.push(`<div class="outline-row outline-root">${esc(goal ? goal.text : goalId)}</div>`);
+    }
+
+    const accepted = state.accepted.get(goalId);
+    if (!accepted) {
+      rows.push(`<div class="outline-row outline-pending" style="padding-left:${(depth + 1) * 18}px">pending decomposition…</div>`);
+      return rows.join("");
+    }
+
+    const proposalsForGoal = state.proposals.get(goalId);
+    const proposal = proposalsForGoal ? proposalsForGoal.get(accepted.proposal_id) : null;
+    const proposer = proposal ? proposal.proposer_peer : null;
+    const votes = acceptedVotes(goalId);
+    const votesTooltip = votes.length
+      ? "real votes: " + votes.map((s) => `${shortId(s.scorer_peer)}=${s.score.toFixed(2)}`).join(", ")
+      : "no individual votes observed";
+    const attrib = `<span class="outline-attrib" title="${esc(votesTooltip)}">&larr; ${proposer ? shortId(proposer) : "unknown agent"}, score ${accepted.final_score.toFixed(2)}</span>`;
+
+    for (const subText of accepted.subgoals) {
+      const childGoal = findChildGoal(goalId, subText);
+      let statusHtml = "";
+      if (!childGoal) {
+        const node = findNode(goalId, subText);
+        if (node) {
+          const result = state.results.get(node.node_id);
+          const failure = state.nodeFailures.get(node.node_id);
+          const status = failure ? "failed" : result ? "done" : "pending";
+          statusHtml = `<span class="outline-status ${status}">(${status})</span>`;
+        }
+      }
+      rows.push(`<div class="outline-row" style="padding-left:${(depth + 1) * 18}px">${esc(subText)} ${attrib}${statusHtml}</div>`);
+      if (childGoal) rows.push(renderOutline(childGoal.goal_id, depth + 1));
+    }
+    return rows.join("");
+  }
+
+  let goalsView = "outline";
+  document.querySelectorAll("#goalsViewToggle button").forEach((btn) => {
+    btn.onclick = () => {
+      goalsView = btn.dataset.view;
+      document.querySelectorAll("#goalsViewToggle button").forEach((b) => b.classList.toggle("active", b === btn));
+      renderGoals();
+    };
+  });
+
+  // Maximize/restore: standard "expand panel to a centered overlay" pattern
+  // -- backdrop click and Escape both restore, matching how modals usually behave.
+  (function setUpMaximize(panel, button) {
+    let backdrop = null;
+    function setMaximized(on) {
+      panel.classList.toggle("maximized", on);
+      button.textContent = on ? "⤡" : "⤢";
+      button.title = on ? "Restore" : "Maximize";
+      button.setAttribute("aria-label", on ? "Restore plan tree" : "Maximize plan tree");
+      if (on && !backdrop) {
+        backdrop = document.createElement("div");
+        backdrop.className = "modal-backdrop";
+        backdrop.onclick = () => setMaximized(false);
+        document.body.appendChild(backdrop);
+      } else if (!on && backdrop) {
+        backdrop.remove();
+        backdrop = null;
+      }
+    }
+    button.addEventListener("click", () => setMaximized(!panel.classList.contains("maximized")));
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && panel.classList.contains("maximized")) setMaximized(false);
+    });
+  })(document.getElementById("goalsPanel"), document.getElementById("goalsMaximizeBtn"));
+
+  function renderGoals() {
+    const body = document.getElementById("goalsBody");
+    if (state.roots.size === 0) {
+      body.innerHTML = '<div class="empty-hint">No goals submitted yet. Run a decomposer with --submit-goal.</div>';
+      return;
+    }
+    body.innerHTML = goalsView === "outline"
+      ? `<div class="outline-tree">${[...state.roots].map((id) => renderOutline(id, 0)).join("")}</div>`
+      : [...state.roots].map(renderGoal).join("");
+  }
+
+  // ---------------------------------------------------------------- outputs
+  function goalBreadcrumb(goalId) {
+    const parts = [];
+    let g = state.goals.get(goalId);
+    let guard = 0;
+    while (g && guard++ < 25) {
+      parts.unshift(g.text);
+      g = g.parent_id ? state.goals.get(g.parent_id) : null;
+    }
+    return parts.join(" › ");
+  }
+
+  function formatTime(ts) {
+    if (!ts) return "";
+    return ts.includes("T") ? ts.split("T")[1].replace("Z", "").slice(0, 8) : ts;
+  }
+
+  function renderOutputs() {
+    const body = document.getElementById("outputsBody");
+    const countEl = document.getElementById("outputCount");
+    const ids = [...new Set(state.outputsOrder)].reverse(); // newest first
+    let doneCount = 0, failCount = 0;
+    const cards = [];
+
+    for (const nodeId of ids) {
+      const result = state.results.get(nodeId);
+      const failure = state.nodeFailures.get(nodeId);
+      const node = state.nodes.get(nodeId);
+      const title = node ? node.text : nodeId;
+      const outputText = result ? result.output : (failure ? failure.summary : "");
+      if (outputFilter && !(title.toLowerCase().includes(outputFilter) || outputText.toLowerCase().includes(outputFilter))) {
+        continue;
+      }
+
+      const success = !!(result && result.success);
+      if (result) { success ? doneCount++ : failCount++; } else if (failure) { failCount++; }
+      const meta = state.resultMeta.get(nodeId) || {};
+      const breadcrumb = node ? goalBreadcrumb(node.goal_id) : "";
+      const badgeColor = success ? "var(--good)" : "var(--bad)";
+      const badgeText = result ? (success ? "success" : "failed") : "capability gap";
+
+      cards.push(`<div class="output-card${success ? "" : " failed"}">
+        <div class="output-head">
+          <span class="status-pill" style="color:${badgeColor}">${badgeText}</span>
+          ${meta.peer ? `<span class="output-peer">${shortId(meta.peer)}</span>` : ""}
+          <span class="output-ts">${formatTime(meta.ts)}</span>
+        </div>
+        ${breadcrumb ? `<div class="output-breadcrumb">${esc(breadcrumb)}</div>` : ""}
+        <div class="output-title">${esc(title)}</div>
+        <div class="output-body" data-node="${nodeId}">${esc(outputText)}</div>
+        <div class="output-actions">
+          <button class="mini-btn copy-btn" data-node="${nodeId}">Copy</button>
+          <button class="mini-btn expand-btn" data-node="${nodeId}">Expand</button>
+        </div>
+      </div>`);
+    }
+
+    countEl.textContent = `${doneCount} done · ${failCount} failed`;
+    body.innerHTML = cards.length
+      ? cards.join("")
+      : `<div class="empty-hint">${outputFilter ? "No outputs match your filter." : "No completed outputs yet."}</div>`;
+
+    body.querySelectorAll(".copy-btn").forEach((btn) => {
+      btn.onclick = () => {
+        const result = state.results.get(btn.dataset.node);
+        const text = result ? result.output : "";
+        const restore = () => { btn.textContent = "Copy"; };
+        navigator.clipboard?.writeText(text).then(() => {
+          btn.textContent = "Copied!";
+          setTimeout(restore, 1200);
+        }).catch(() => {});
+      };
+    });
+    body.querySelectorAll(".expand-btn").forEach((btn) => {
+      btn.onclick = () => {
+        const el = body.querySelector(`.output-body[data-node="${btn.dataset.node}"]`);
+        el.classList.toggle("expanded");
+        btn.textContent = el.classList.contains("expanded") ? "Collapse" : "Expand";
+      };
+    });
+  }
+
+  document.getElementById("outputSearch").addEventListener("input", (e) => {
+    outputFilter = e.target.value.trim().toLowerCase();
+    renderOutputs();
+  });
+
+  // ---------------------------------------------------------------- stats + render loop
+  function renderStats() {
+    const el = document.getElementById("statStrip");
+    el.innerHTML = `<span>events <b>${totalEvents}</b></span>` +
+      Object.entries(kindCounts).map(([k, v]) => `<span>${k} <b>${v}</b></span>`).join("");
+  }
+
+  let renderQueued = false;
+  function scheduleRender() {
+    if (renderQueued) return;
+    renderQueued = true;
+    // setTimeout, not requestAnimationFrame: rAF callbacks are fully
+    // suspended by the browser while this tab is hidden/backgrounded (a
+    // monitoring dashboard is routinely left in a background tab), which
+    // would otherwise freeze every panel except the log (which renders
+    // synchronously in appendLogRow, outside this batch).
+    setTimeout(() => {
+      renderQueued = false;
+      renderPeers();
+      renderGoals();
+      renderOutputs();
+      renderStats();
+      if (flowLayout.size !== state.peers.size) layoutFlow();
+    }, 16);
+  }
+
+  document.getElementById("minScoreInput").addEventListener("input", scheduleRender);
+  document.getElementById("nConfirmInput").addEventListener("input", scheduleRender);
+
+  // ---------------------------------------------------------------- SSE
+  const dot = document.getElementById("connDot");
+  const label = document.getElementById("connLabel");
+  const es = new EventSource("/events");
+  es.onopen = () => { dot.className = "dot connected"; label.textContent = "connected"; };
+  es.onerror = () => { dot.className = "dot connecting"; label.textContent = "reconnecting…"; };
+  es.onmessage = (msg) => {
+    const evt = JSON.parse(msg.data);
+    if (evt.kind === "_replay_complete") { replayDone = true; scheduleRender(); return; }
+    applyEvent(evt);
+    scheduleRender();
+  };
+
+  layoutFlow();
+})();
+</script>
+</body>
+</html>
