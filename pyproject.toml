@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Peer-to-peer goal decomposition: decentralized generate -> score -> refine over libp2p"
 requires-python = ">=3.11"
 dependencies = [
-    "libp2p>=0.6.0",
+    "libp2p>=0.7.0",
     "pydantic>=2.6",
     "anthropic>=0.40",
     "trio>=0.25",

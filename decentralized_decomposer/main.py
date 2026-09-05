@@ -27,7 +27,7 @@ from pathlib import Path
 import trio
 from anthropic import AsyncAnthropic
 from libp2p.pubsub.gossipsub import GossipSub
-from libp2p.tools.async_service.trio_service import background_trio_service
+from libp2p.tools.anyio_service import background_trio_service
 
 from decentralized_decomposer import config as dd_config
 from decentralized_decomposer.agents.dashboard_agent import DashboardAgent

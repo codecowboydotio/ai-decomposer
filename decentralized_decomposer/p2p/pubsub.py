@@ -58,10 +58,12 @@ def _patch_message_all_peers_dict_race() -> None:
         return
     original = Pubsub.message_all_peers
 
-    async def message_all_peers_retrying(self: Pubsub, raw_msg: bytes) -> None:
+    async def message_all_peers_retrying(
+        self: Pubsub, *args: object, **kwargs: object
+    ) -> None:
         for attempt in range(_MESSAGE_ALL_PEERS_RACE_RETRIES + 1):
             try:
-                await original(self, raw_msg)
+                await original(self, *args, **kwargs)
                 return
             except RuntimeError as exc:
                 if (
