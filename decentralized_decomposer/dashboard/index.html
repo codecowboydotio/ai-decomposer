@@ -71,6 +71,7 @@
   #peersPanel { flex: 0 0 auto; max-height: 40%; }
   #legendPanel { flex: 0 0 auto; }
   #flowPanel { flex: 0 0 auto; height: 220px; }
+  #flowPanel.maximized { height: auto; }
   #logPanel { flex: 1 1 auto; min-height: 100px; }
   #outputsPanel { flex: 1 1 58%; min-height: 200px; }
   #goalsPanel { flex: 1 1 42%; min-height: 140px; }
@@ -105,9 +106,13 @@
 
   .legend-row { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); padding: 2px 0; }
 
-  svg#flowSvg { width: 100%; height: 100%; display: block; }
-  .peer-node-label { fill: var(--text); font-size: 8px; font-family: var(--mono); }
-  .hub-label { fill: var(--muted); font-size: 8px; }
+  /* --flow-scale is set from JS in layoutFlow() so node labels grow with the
+     panel instead of staying 8px while the graph around them gets bigger. */
+  svg#flowSvg { width: 100%; height: 100%; display: block; --flow-scale: 1; }
+  .peer-node-label {
+    fill: var(--text); font-size: calc(8px * var(--flow-scale)); font-family: var(--mono);
+  }
+  .hub-label { fill: var(--muted); font-size: calc(8px * var(--flow-scale)); }
 
   .log-row {
     display: grid; grid-template-columns: 58px 78px 1fr; gap: 8px; align-items: baseline;
@@ -242,7 +247,12 @@
 
   <div class="col">
     <div class="panel" id="flowPanel">
-      <div class="panel-title">Message flow</div>
+      <div class="panel-title">
+        Message flow
+        <div class="panel-title-actions">
+          <button id="flowMaximizeBtn" class="icon-btn" type="button" title="Maximize" aria-label="Maximize message flow">⤢</button>
+        </div>
+      </div>
       <div class="panel-body" style="padding:0;">
         <svg id="flowSvg" viewBox="0 0 480 260"></svg>
       </div>
@@ -459,23 +469,45 @@
 
   // ---------------------------------------------------------------- flow viz
   let flowLayout = new Map(); // peer_id -> {x,y}
+  // Geometry is recomputed from the panel's real size on every layout (see the
+  // maximize/resize hooks further down) rather than hardcoded, so maximizing
+  // the panel gives a genuinely bigger graph instead of the same small one
+  // scaled up by the viewBox. pulseFlow()/flashHub() read the hub from here.
+  const FLOW_DESIGN_SIZE = 260; // the height the original 480x260 look was tuned at
+  let flowGeom = { cx: 240, cy: 130, r: 100, scale: 1 };
+
   function layoutFlow() {
     const svg = document.getElementById("flowSvg");
+    const rect = svg.getBoundingClientRect();
+    // Fall back to the original viewBox if the panel isn't laid out yet.
+    const w = Math.round(rect.width) || 480;
+    const h = Math.round(rect.height) || 260;
+    // 1 user unit == 1 CSS px, so nothing is stretched and text stays crisp.
+    svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+
+    const scale = Math.max(1, Math.min(w, h) / FLOW_DESIGN_SIZE);
+    const cx = w / 2, cy = h / 2;
+    // Leave room for the node label sitting above each dot.
+    const r = Math.max(40, Math.min(w, h) * 0.5 - 16 * scale);
+    flowGeom = { cx, cy, r, scale };
+    svg.style.setProperty("--flow-scale", scale);
+
+    const hubR = 14 * scale;
+    const nodeR = 8 * scale;
     const ids = [...state.peers.keys()];
-    const cx = 240, cy = 130, r = 100;
     flowLayout = new Map();
     ids.forEach((id, i) => {
       const angle = (i / Math.max(ids.length, 1)) * Math.PI * 2 - Math.PI / 2;
       flowLayout.set(id, { x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) });
     });
 
-    let svgHtml = `<circle cx="${cx}" cy="${cy}" r="14" fill="var(--panel-2)" stroke="var(--border)"/>
-      <text x="${cx}" y="${cy + 3}" text-anchor="middle" class="hub-label">gossip</text>`;
+    let svgHtml = `<circle cx="${cx}" cy="${cy}" r="${hubR}" fill="var(--panel-2)" stroke="var(--border)"/>
+      <text x="${cx}" y="${cy + 3 * scale}" text-anchor="middle" class="hub-label">gossip</text>`;
     for (const [id, pos] of flowLayout) {
       const role = primaryRole(getPeer(id));
-      svgHtml += `<line x1="${pos.x}" y1="${pos.y}" x2="${cx}" y2="${cy}" stroke="var(--border)" stroke-width="1"/>
-        <circle cx="${pos.x}" cy="${pos.y}" r="8" fill="${ROLE_COLOR[role]}" fill-opacity="0.85"/>
-        <text x="${pos.x}" y="${pos.y - 12}" text-anchor="middle" class="peer-node-label">${shortId(id)}</text>`;
+      svgHtml += `<line x1="${pos.x}" y1="${pos.y}" x2="${cx}" y2="${cy}" stroke="var(--border)" stroke-width="${scale}"/>
+        <circle cx="${pos.x}" cy="${pos.y}" r="${nodeR}" fill="${ROLE_COLOR[role]}" fill-opacity="0.85"/>
+        <text x="${pos.x}" y="${pos.y - 12 * scale}" text-anchor="middle" class="peer-node-label">${shortId(id)}</text>`;
     }
     svg.innerHTML = svgHtml;
   }
@@ -492,17 +524,17 @@
     const svg = document.getElementById("flowSvg");
     const ns = "http://www.w3.org/2000/svg";
     const dot = document.createElementNS(ns, "circle");
-    dot.setAttribute("r", "4");
+    dot.setAttribute("r", String(4 * flowGeom.scale));
     dot.setAttribute("fill", KIND_COLOR[evt.kind] || "var(--accent)");
     dot.setAttribute("cx", pos.x);
     dot.setAttribute("cy", pos.y);
     const anim = document.createElementNS(ns, "animate");
     anim.setAttribute("attributeName", "cx");
-    anim.setAttribute("from", pos.x); anim.setAttribute("to", "240");
+    anim.setAttribute("from", pos.x); anim.setAttribute("to", String(flowGeom.cx));
     anim.setAttribute("dur", "0.7s"); anim.setAttribute("fill", "freeze");
     const anim2 = document.createElementNS(ns, "animate");
     anim2.setAttribute("attributeName", "cy");
-    anim2.setAttribute("from", pos.y); anim2.setAttribute("to", "130");
+    anim2.setAttribute("from", pos.y); anim2.setAttribute("to", String(flowGeom.cy));
     anim2.setAttribute("dur", "0.7s"); anim2.setAttribute("fill", "freeze");
     const fade = document.createElementNS(ns, "animate");
     fade.setAttribute("attributeName", "opacity");
@@ -517,10 +549,13 @@
     const svg = document.getElementById("flowSvg");
     const ns = "http://www.w3.org/2000/svg";
     const ring = document.createElementNS(ns, "circle");
-    ring.setAttribute("cx", "240"); ring.setAttribute("cy", "130"); ring.setAttribute("r", "14");
-    ring.setAttribute("fill", "none"); ring.setAttribute("stroke", "var(--good)"); ring.setAttribute("stroke-width", "2");
+    ring.setAttribute("cx", String(flowGeom.cx)); ring.setAttribute("cy", String(flowGeom.cy));
+    ring.setAttribute("r", String(14 * flowGeom.scale));
+    ring.setAttribute("fill", "none"); ring.setAttribute("stroke", "var(--good)");
+    ring.setAttribute("stroke-width", String(2 * flowGeom.scale));
     const anim = document.createElementNS(ns, "animate");
-    anim.setAttribute("attributeName", "r"); anim.setAttribute("from", "14"); anim.setAttribute("to", "40");
+    anim.setAttribute("attributeName", "r");
+    anim.setAttribute("from", String(14 * flowGeom.scale)); anim.setAttribute("to", String(40 * flowGeom.scale));
     anim.setAttribute("dur", "0.6s"); anim.setAttribute("fill", "freeze");
     const fade = document.createElementNS(ns, "animate");
     fade.setAttribute("attributeName", "opacity"); fade.setAttribute("from", "1"); fade.setAttribute("to", "0");
@@ -755,13 +790,14 @@
 
   // Maximize/restore: standard "expand panel to a centered overlay" pattern
   // -- backdrop click and Escape both restore, matching how modals usually behave.
-  (function setUpMaximize(panel, button) {
+  function setUpMaximize(panel, button, label, onToggle) {
     let backdrop = null;
     function setMaximized(on) {
       panel.classList.toggle("maximized", on);
       button.textContent = on ? "⤡" : "⤢";
       button.title = on ? "Restore" : "Maximize";
-      button.setAttribute("aria-label", on ? "Restore plan tree" : "Maximize plan tree");
+      button.setAttribute("aria-label", `${on ? "Restore" : "Maximize"} ${label}`);
+      if (onToggle) onToggle(on);
       if (on && !backdrop) {
         backdrop = document.createElement("div");
         backdrop.className = "modal-backdrop";
@@ -776,7 +812,24 @@
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape" && panel.classList.contains("maximized")) setMaximized(false);
     });
-  })(document.getElementById("goalsPanel"), document.getElementById("goalsMaximizeBtn"));
+  }
+  setUpMaximize(
+    document.getElementById("goalsPanel"),
+    document.getElementById("goalsMaximizeBtn"),
+    "plan tree",
+  );
+  // The flow graph's geometry is derived from its box size, so it has to be
+  // relaid out whenever that box changes. Toggling maximized and resizing the
+  // window are the only two things that change it -- the panel is a fixed
+  // height otherwise -- and both are explicit events, so hooking them directly
+  // avoids depending on a ResizeObserver firing for an <svg>.
+  setUpMaximize(
+    document.getElementById("flowPanel"),
+    document.getElementById("flowMaximizeBtn"),
+    "message flow",
+    () => layoutFlow(),
+  );
+  window.addEventListener("resize", layoutFlow);
 
   function renderGoals() {
     const body = document.getElementById("goalsBody");
