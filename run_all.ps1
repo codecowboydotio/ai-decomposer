@@ -10,6 +10,7 @@
     .\run_all.ps1 -Goal "Plan a two-week trip to Japan"
     .\run_all.ps1 -Goal "..." -ScorerCount 5 -MaxDepth 2 -NumSplits 4
     .\run_all.ps1 -Goal "..." -StartDelaySeconds 2
+    .\run_all.ps1 -Goal "..." -DashboardHost 127.0.0.1   # dashboard-only, no LAN access
 
     Ctrl+C stops every agent it started. Dashboard UI: http://127.0.0.1:8765
 #>
@@ -27,7 +28,10 @@ param(
     [string]$Capabilities = "can_write_text,can_query_api",
     # Delay between starting each agent process, to stagger port binding /
     # gossip-mesh formation instead of launching everything at once.
-    [double]$StartDelaySeconds = 0
+    [double]$StartDelaySeconds = 0,
+    # Interface the dashboard's HTTP server binds to. 0.0.0.0 makes it
+    # reachable from other machines on the network, not just this one.
+    [string]$DashboardHost = "0.0.0.0"
 )
 
 $ErrorActionPreference = "Stop"
@@ -84,7 +88,7 @@ Write-Host "  Max depth:         $MaxDepth"
 Write-Host "  Subgoals per split: $splitDescription"
 Write-Host "  Executor capabilities: $Capabilities"
 Write-Host "  Start delay:       ${StartDelaySeconds}s between agents"
-Write-Host "  Dashboard UI:      http://127.0.0.1:8765"
+Write-Host "  Dashboard UI:      http://127.0.0.1:8765 (bound to ${DashboardHost}:8765)"
 Write-Host "  Logs:              $LogDir\*.log"
 Write-Host "=========================="
 Write-Host ""
@@ -101,7 +105,7 @@ try {
     }
 
     Start-Agent -Name "observer"  -AgentArgs @("--role", "observer", "--port", "4001")
-    Start-Agent -Name "dashboard" -AgentArgs @("--role", "dashboard", "--port", "4006", "--dashboard-port", "8765")
+    Start-Agent -Name "dashboard" -AgentArgs @("--role", "dashboard", "--port", "4006", "--dashboard-port", "8765", "--dashboard-host", $DashboardHost)
     for ($i = 1; $i -le $ScorerCount; $i++) {
         $scorerPort = 4010 + $i
         Start-Agent -Name "scorer$i" -AgentArgs @("--role", "scorer", "--port", "$scorerPort", "--max-depth", "$MaxDepth")
@@ -115,7 +119,15 @@ try {
     Write-Host "Press Ctrl+C to stop."
     Write-Host ""
 
-    Wait-Process -Id ($script:processes | ForEach-Object { $_.Id })
+    # Not Wait-Process: it blocks on an unmanaged Win32 wait that PowerShell's
+    # Ctrl+C handling can't interrupt cleanly, so Ctrl+C falls through to the
+    # OS default action and kills the whole console (this script's `finally`
+    # never runs, and surviving agent processes are left orphaned). Polling
+    # with Start-Sleep keeps control inside the managed pipeline, so Ctrl+C
+    # stops just this loop and lets `finally` clean up the agents.
+    while ($script:processes | Where-Object { -not $_.HasExited }) {
+        Start-Sleep -Milliseconds 500
+    }
 }
 finally {
     Stop-AllAgents

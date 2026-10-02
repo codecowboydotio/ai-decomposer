@@ -7,6 +7,7 @@
 #   export ANTHROPIC_API_KEY=sk-...
 #   ./run_all.sh "Plan a two-week trip to Japan"
 #   ./run_all.sh "Plan a two-week trip to Japan" 2   # 2s delay between each agent start
+#   ./run_all.sh "Plan a two-week trip to Japan" 0 127.0.0.1   # dashboard-only, no LAN access
 #
 # Ctrl-C stops every agent it started. Dashboard UI: http://127.0.0.1:8765
 
@@ -17,6 +18,9 @@ GOAL="${1:-Plan a two-week trip to Japan}"
 # stagger port binding / gossip-mesh formation instead of launching everything
 # at once.
 START_DELAY="${2:-0}"
+# Interface the dashboard's HTTP server binds to. 0.0.0.0 makes it reachable
+# from other machines on the network, not just this one.
+DASHBOARD_HOST="${3:-0.0.0.0}"
 LOG_DIR="logs"
 mkdir -p "$LOG_DIR"
 
@@ -27,7 +31,11 @@ cleanup() {
         kill "$pid" 2>/dev/null || true
     done
 }
-trap cleanup EXIT INT TERM
+# EXIT alone covers normal completion; INT/TERM must also exit explicitly so
+# a Ctrl-C is handled once and the script doesn't fall back into `wait` with
+# nothing left to wait on.
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT TERM
 
 echo "Start delay: ${START_DELAY}s between agents"
 
@@ -41,13 +49,13 @@ start() {
 }
 
 start observer   --role observer   --port 4001
-start dashboard   --role dashboard  --port 4006 --dashboard-port 8765
+start dashboard   --role dashboard  --port 4006 --dashboard-port 8765 --dashboard-host "$DASHBOARD_HOST"
 start scorer1     --role scorer     --port 4002
 start scorer2     --role scorer     --port 4003
 start executor    --role executor   --port 4004 --capabilities can_write_text,can_query_api
 start decomposer  --role decomposer --port 4005 --submit-goal "$GOAL"
 
-echo "All agents running. Dashboard UI: http://127.0.0.1:8765"
+echo "All agents running. Dashboard UI: http://127.0.0.1:8765 (bound to ${DASHBOARD_HOST}:8765)"
 echo "Tail logs with: tail -f $LOG_DIR/*.log"
 echo "Press Ctrl-C to stop."
 wait
