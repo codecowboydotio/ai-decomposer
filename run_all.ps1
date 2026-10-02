@@ -9,20 +9,25 @@
     $env:ANTHROPIC_API_KEY = "sk-..."
     .\run_all.ps1 -Goal "Plan a two-week trip to Japan"
     .\run_all.ps1 -Goal "..." -ScorerCount 5 -MaxDepth 2 -NumSplits 4
+    .\run_all.ps1 -Goal "..." -StartDelaySeconds 2
 
     Ctrl+C stops every agent it started. Dashboard UI: http://127.0.0.1:8765
 #>
 
 param(
-    [string]$Goal = "Plan a two-week trip to Japan, ensure every subgoal and output is a prompt suitable to feed into another agent in terms of system and user prompt",
+    #[string]$Goal = "Plan a two-week trip to Japan, ensure every subgoal and output is a prompt suitable to feed into another agent in terms of system and user prompt",
+    [string]$Goal = "Give me an exercise plan for someone with IPF",
     [int]$ScorerCount = 3,
-    [int]$MaxDepth = 3,
+    [int]$MaxDepth = 2,
     [int]$MinSplits = 2,
     [int]$MaxSplits = 6,
     # 0 = unset: let the LLM pick a count within [MinSplits, MaxSplits] for
     # the initial goal, same as any other goal. Set > 0 to pin an exact count.
     [int]$NumSplits = 0,
-    [string]$Capabilities = "can_write_text,can_query_api"
+    [string]$Capabilities = "can_write_text,can_query_api",
+    # Delay between starting each agent process, to stagger port binding /
+    # gossip-mesh formation instead of launching everything at once.
+    [double]$StartDelaySeconds = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -52,6 +57,9 @@ function Start-Agent {
         -PassThru -NoNewWindow -WorkingDirectory $PSScriptRoot
     $script:processes += $proc
     Write-Host "started $Name (pid $($proc.Id)) -> $outLog"
+    if ($StartDelaySeconds -gt 0) {
+        Start-Sleep -Seconds $StartDelaySeconds
+    }
 }
 
 function Stop-AllAgents {
@@ -75,6 +83,7 @@ Write-Host "  Scorers:           $ScorerCount (config.py's N_CONFIRMATIONS defau
 Write-Host "  Max depth:         $MaxDepth"
 Write-Host "  Subgoals per split: $splitDescription"
 Write-Host "  Executor capabilities: $Capabilities"
+Write-Host "  Start delay:       ${StartDelaySeconds}s between agents"
 Write-Host "  Dashboard UI:      http://127.0.0.1:8765"
 Write-Host "  Logs:              $LogDir\*.log"
 Write-Host "=========================="

@@ -6,12 +6,17 @@
 # Usage:
 #   export ANTHROPIC_API_KEY=sk-...
 #   ./run_all.sh "Plan a two-week trip to Japan"
+#   ./run_all.sh "Plan a two-week trip to Japan" 2   # 2s delay between each agent start
 #
 # Ctrl-C stops every agent it started.
 
 set -euo pipefail
 
 GOAL="${1:-Plan a two-week trip to Japan}"
+# Delay (seconds, may be fractional) between starting each agent process, to
+# stagger port binding / gossip-mesh formation instead of launching everything
+# at once.
+START_DELAY="${2:-0}"
 LOG_DIR="logs"
 mkdir -p "$LOG_DIR"
 
@@ -24,12 +29,15 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+echo "Start delay: ${START_DELAY}s between agents"
+
 start() {
     local name="$1"
     shift
     python -m decentralized_decomposer.main "$@" > "$LOG_DIR/$name.log" 2>&1 &
     PIDS+=("$!")
     echo "started $name (pid $!) -> $LOG_DIR/$name.log"
+    sleep "$START_DELAY"
 }
 
 start observer   --role observer   --port 4001

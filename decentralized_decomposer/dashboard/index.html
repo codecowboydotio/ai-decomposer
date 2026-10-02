@@ -71,6 +71,7 @@
   #peersPanel { flex: 0 0 auto; max-height: 40%; }
   #legendPanel { flex: 0 0 auto; }
   #flowPanel { flex: 0 0 auto; height: 220px; }
+  #flowPanel.maximized { height: auto; }
   #logPanel { flex: 1 1 auto; min-height: 100px; }
   #outputsPanel { flex: 1 1 58%; min-height: 200px; }
   #goalsPanel { flex: 1 1 42%; min-height: 140px; }
@@ -242,7 +243,12 @@
 
   <div class="col">
     <div class="panel" id="flowPanel">
-      <div class="panel-title">Message flow</div>
+      <div class="panel-title">
+        Message flow
+        <div class="panel-title-actions">
+          <button id="flowMaximizeBtn" class="icon-btn" type="button" title="Maximize" aria-label="Maximize message flow">⤢</button>
+        </div>
+      </div>
       <div class="panel-body" style="padding:0;">
         <svg id="flowSvg" viewBox="0 0 480 260"></svg>
       </div>
@@ -260,7 +266,10 @@
     <div class="panel" id="outputsPanel">
       <div class="panel-title">
         Outputs
-        <span id="outputCount">0 done · 0 failed</span>
+        <div class="panel-title-actions">
+          <span id="outputCount">0 done · 0 failed</span>
+          <button id="outputsMaximizeBtn" class="icon-btn" type="button" title="Maximize" aria-label="Maximize outputs">⤢</button>
+        </div>
       </div>
       <div style="padding:8px 10px 0;">
         <input id="outputSearch" type="text" placeholder="Filter outputs by task or content…" />
@@ -755,13 +764,13 @@
 
   // Maximize/restore: standard "expand panel to a centered overlay" pattern
   // -- backdrop click and Escape both restore, matching how modals usually behave.
-  (function setUpMaximize(panel, button) {
+  function setUpMaximize(panel, button, label) {
     let backdrop = null;
     function setMaximized(on) {
       panel.classList.toggle("maximized", on);
       button.textContent = on ? "⤡" : "⤢";
       button.title = on ? "Restore" : "Maximize";
-      button.setAttribute("aria-label", on ? "Restore plan tree" : "Maximize plan tree");
+      button.setAttribute("aria-label", on ? `Restore ${label}` : `Maximize ${label}`);
       if (on && !backdrop) {
         backdrop = document.createElement("div");
         backdrop.className = "modal-backdrop";
@@ -776,7 +785,10 @@
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape" && panel.classList.contains("maximized")) setMaximized(false);
     });
-  })(document.getElementById("goalsPanel"), document.getElementById("goalsMaximizeBtn"));
+  }
+  setUpMaximize(document.getElementById("goalsPanel"), document.getElementById("goalsMaximizeBtn"), "plan tree");
+  setUpMaximize(document.getElementById("outputsPanel"), document.getElementById("outputsMaximizeBtn"), "outputs");
+  setUpMaximize(document.getElementById("flowPanel"), document.getElementById("flowMaximizeBtn"), "message flow");
 
   function renderGoals() {
     const body = document.getElementById("goalsBody");
